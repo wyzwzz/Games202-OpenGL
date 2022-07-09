@@ -1,5 +1,210 @@
-#version 120
+#version 460 core
+#define PI 3.14159265
+
+layout(location = 0) in vec2 iUV;
+
+layout(location = 0) out vec4 oFragColor;
+
+layout(std140,binding = 0) uniform IndirectParams{
+    mat4 View;
+    mat4 Proj;
+
+    int IndirectSampleCount;
+    int IndirectRayMaxSteps;
+    int FrameIndex;
+    int TraceMaxLevel;
+    int Width;
+    int Height;
+    float DepthThreshold;
+    float RayMarchingStep;
+};
+
+layout(std430,binding = 0) buffer RandomSamples{
+    vec2 RawSamples[];//sample count with IndirectSampleCount
+};
+
+uniform sampler2D Direct;
+uniform sampler2D GBuffer0;
+uniform sampler2D GBuffer1;
+uniform sampler2D ViewDepth;
+
+vec3 decodeNormal(vec2 f)
+{
+    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    float t = clamp(-n.z,0,1);
+    n.xy += all(greaterThanEqual(n.xy,vec2(0.0))) ? vec2(-t) : vec2(t);
+    return normalize(n);
+}
+// http://advances.realtimerendering.com/s2015/
+// stochastic screen-space reflections
+bool hierarchicalRayTrace(in float jitter,in vec3 ori,in vec3 dir,out vec2 res_uv){
+    //basic idea: trace ray in view space
+    //stackless ray walk of min-z pyramid
+    //mip = 0
+    //while(level > -1 )
+    //    step through current cell
+    //    if(above z plane) ++level;
+    //    if(below z plane) --level;
+
+    vec3 end = ori + dir;
+
+    vec4 ori_clip = Proj * vec4(ori,1.0);
+    vec4 end_clip = Proj * vec4(end,1.0);
+
+    float inv_ori_w = 1.0 / ori_clip.w;
+    float inv_end_w = 1.0 / end_clip.w;
+
+    vec2 ori_ndc = ori_clip.xy / inv_ori_w;//-1 ~ 1
+    vec2 end_ndc = end_clip.xy / inv_end_w;
+
+    vec2 extend_ndc = end_ndc - ori_ndc;
+    int width = Width;
+    int height = Height;
+    bool swap_xy = false;
+    if(abs(extend_ndc.x * Width) < abs(extend_ndc.y * Height)){
+        swap_xy = true;
+        ori_ndc = ori_ndc.yx;
+        end_ndc = end_ndc.yx;
+        extend_ndc = extend_ndc.yx;
+        width = Height;
+        height = Width;
+    }
+    float dx = sign(extend_ndc.x) * 2 / width;
+    dx *= abs(extend_ndc.x) / length(extend_ndc);
+    float dy = extend_ndc.y / extend_ndc.x * dx;
+    // differential ndc in unit dist
+    vec2 dp = vec2(dx,dy);
+
+    float ori_z_over_w = ori.z * inv_ori_w;//-1 ~ 1
+    float end_z_over_w = end.z * inv_ori_w;
+    float dz_over_w = (end_z_over_w - ori_z_over_w) / extend_ndc.x * dx;
+    float dinv_w = (inv_end_w - inv_ori_w) / extend_ndc.x * dx;
+
+    //start from level 0
+    int level = 0;
+    //ray advance step, will change according to current level
+    float step = pow(2,level);
+    float level_advance_dist[7];
+    int total_steps = 128;
+    int steps_count = 0;
+    int hit = 0;
+    while(true){
+
+        if(++steps_count > total_steps)
+            return false;
+
+        //get curret ray advance start pos
+        float t = level_advance_dist[level];
+        //update ray advance dist after current step
+        level_advance_dist[level] = t + step;
+
+        //compute current ray ndc
+
+        vec2 p = ori_ndc + t * dp;
+        float z_over_w = ori_z_over_w + t * dz_over_w;
+        float inv_w = inv_ori_w + t * dinv_w;
+
+        vec2 ndc = swap_xy ? p.yx : p;
+        vec2 uv = ndc * 0.5 + 0.5;
+        if(any(notEqual(clamp(uv,vec2(0),vec2(1)),uv)))
+            return false;
+
+        float ray_depth = z_over_w / inv_w - DepthThreshold;
+        float cell_z = textureLod(ViewDepth,uv,level).r;
+
+        if(ray_depth < cell_z){
+            if(--hit == 0){
+                level = max(level + 1,6);
+                step *= 2;
+            }
+            continue;
+        }
+        //ray intersect with cell of this level, so just advance half of current step
+        if(level-- == 0){
+            res_uv = uv;
+            return (ray_depth - DepthThreshold) <= cell_z;
+        }
+        hit = 4;
+        step /= 2;
+        level_advance_dist[level] = t + step;
+    }
+    return false;
+}
+
+bool linearRayMarching(in float jitter,in vec3 ori,in vec3 dir,out vec2 res_uv){
+    float step = RayMarchingStep;
+    float t = jitter * step;
+    for(int i = 0; i < IndirectRayMaxSteps; i++){
+        vec3 p = ori + dir * (t + 0.5 * step);
+        t += step;
+        vec4 clip_pos = Proj * vec4(p,1.0);
+        vec2 uv = clip_pos.xy/clip_pos.w * 0.5 + 0.5;
+        float ray_depth = p.z;
+        if(any(notEqual(clamp(uv,vec2(0),vec2(1)),uv)))
+            return false;
+        float z = textureLod(ViewDepth,uv,0).r;
+        if(ray_depth  >=  z && ray_depth - DepthThreshold <= z){
+            res_uv = uv;
+            return true;
+        }
+    }
+    return false;
+}
 
 void main() {
-    gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+    vec4 p0 = texture(GBuffer0,iUV);
+    vec4 p1 = texture(GBuffer1,iUV);
+    vec3 pos = p0.xyz;
+    vec2 oct_normal = vec2(p0.w,p1.w);
+    vec3 normal = decodeNormal(oct_normal);
+    vec2 color1 = unpackHalf2x16(floatBitsToUint(p1.x));
+    vec3 albedo = vec3(color1.x,p1.g,color1.y);
+    float view_z = p1.z;
+
+    //transform to view space
+    vec3 ori = vec3(View * vec4(pos,1.0));
+
+    //compute local coord from normal for pos
+    vec3 local_z = normal;
+    vec3 local_y;
+    if(abs(dot(local_z,vec3(1,0,0))) < 0.7)// approximate cos45
+        local_y = cross(local_z,vec3(1,0,0));
+    else
+        local_y = cross(local_z,vec3(0,1,0));
+    local_y = normalize(local_y);
+    vec3 local_x = cross(local_y,local_z);
+
+    //indirect
+    //each fragment and frame random offset for accumulate
+    vec2 sample_offset = vec2(fract(sin(FrameIndex + dot(pos.xy, vec2(12.9898, 78.233) * 2.0)) * 43758.5453));
+    vec3 indirect_sum = vec3(0);
+    for(int i = 0; i < IndirectSampleCount; ++i){
+        vec2 rand = RawSamples[i];
+        rand = fract(rand + sample_offset);
+
+        //sample hemisphere
+        float sin_theta = sqrt(1 - rand.x);
+        float phi = 2 * PI * rand.y;
+        float cos_theta = sqrt(rand.x);
+
+        //local dir in z-hemisphere
+        vec3 local_dir = vec3(cos_theta * cos(phi),cos_theta * sin(phi), sin_theta);
+        vec3 dir = local_dir.x * local_x + local_dir.y * local_y + local_dir.z * local_z;
+        dir = vec3(View * vec4(dir,0));
+
+        float jitter = fract(sin(FrameIndex + rand.x * 12.9898 * 2) * 43758.5453);
+
+        //perform ray marching accoding to ori and dir
+        vec2 uv;
+        if(linearRayMarching(jitter,ori,dir,uv)){
+            vec3 direct = texture(Direct,uv).rgb;
+            indirect_sum += direct;
+        }
+//        if(hierarchicalRayTrace(jitter,ori,dir,uv)){
+//            vec3 direct = texture(Direct,uv).rgb;
+//            indirect_sum += direct;
+//        }
+    }
+    //d_omega is 2 * PI / N for sample hemisphere
+    oFragColor = vec4(2.0 * PI * indirect_sum / IndirectSampleCount, 1);
 }

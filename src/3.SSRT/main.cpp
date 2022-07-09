@@ -1,5 +1,8 @@
 #include "../common.hpp"
 #include <CGUtils/image.hpp>
+#include <cyPoint.h>
+#include <cySampleElim.h>
+#include <random>
 #define set_uniform_var set_uniform_var_unchecked
 struct DirectionalLight{
     vec3f direction;
@@ -210,22 +213,240 @@ private:
 
 class IndirectRenderer{
 public:
+    struct alignas(16) IndirectParams{
+        mat4 view;
+        mat4 proj;
+        int indirect_sample_count;
+        int indirect_ray_max_steps;
+        int frame_index;
+        int trace_max_level;
+        int width;
+        int height;
+        float depth_threshold;
+        float ray_march_step;
+    };
     void initialize(int w,int h){
+        params.width = w;
+        params.height = h;
+        param_buffer.initialize_handle();
+        param_buffer.reinitialize_buffer_data(nullptr,GL_STATIC_DRAW);
+        color.initialize_handle();
+        color.initialize_texture(1,GL_RGBA8,w,h);
+        shader = program_t::build_from(
+                shader_t<GL_VERTEX_SHADER>::from_file("asset/Lab3/quad.vert"),
+                shader_t<GL_FRAGMENT_SHADER>::from_file("asset/Lab3/indirect.frag"));
+        shader.bind();
+        shader.set_uniform_var("Direct",0);
+        shader.set_uniform_var("GBuffer0",1);
+        shader.set_uniform_var("GBuffer1",2);
+        shader.set_uniform_var("ViewDepth",3);
+        shader.unbind();
+        vao.initialize_handle();
+    }
+    void setSampleCount(int count){
+        raw_samples.destroy();
+        raw_samples.initialize_handle();
+        static std::default_random_engine::result_type seed = 0;
+        const int N = count;
+        std::default_random_engine rng{ seed + 1 };
+        std::uniform_real_distribution<float> dis(0, 1);
+        std::vector<cy::Point2f> candidateSamples;
+        for(int i = 0; i < N; ++i)
+        {
+            for(int j = 0; j < 10; ++j)
+            {
+                const float x = dis(rng);
+                const float y = dis(rng);
+                candidateSamples.push_back({ x, y });
+            }
+        }
+        std::vector<cy::Point2f> resultSamples(N);
+        cy::WeightedSampleElimination<cy::Point2f, float, 2> wse;
+        wse.SetTiling(true);
+        wse.Eliminate(
+                candidateSamples.data(), candidateSamples.size(),
+                resultSamples.data(), resultSamples.size());
 
+        static_assert(sizeof(cy::Point2f) == sizeof(float) * 2);
+        const size_t bufBytes = sizeof(vec2f) * N;
+
+        raw_samples.initialize_buffer_data(reinterpret_cast<vec2f*>(resultSamples.data()),bufBytes,GL_DYNAMIC_STORAGE_BIT);
+        raw_samples.bind(0);
+
+        params.indirect_sample_count = count;
+    }
+    void setDepthThreshold(float s){
+        params.depth_threshold = s;
+    }
+    void setTracer(int max_steps,int trace_max_level,float ray_march_step){
+        params.indirect_ray_max_steps = max_steps;
+        params.trace_max_level = trace_max_level;
+        params.ray_march_step = ray_march_step;
+    }
+    void setFramebuffer(const framebuffer_t& fbo){
+        fbo.attach(GL_COLOR_ATTACHMENT0,color);
+        GL_EXPR(glDrawBuffer(GL_COLOR_ATTACHMENT0));
+        fbo.clear_buffer(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+    }
+    void setSample(const sampler_t& sampler){
+        sampler.bind(0);
+        sampler.bind(1);
+        sampler.bind(2);
+        sampler.bind(3);
+    }
+    void setCamera(const fps_camera_t& camera){
+        params.view = camera.get_view();
+        params.proj = camera.get_proj();
+
+    }
+    void render(const texture2d_t& direct,
+                const texture2d_t& gbuffer0,
+                const texture2d_t& gbuffer1,
+                const texture2d_t& view_z){
+        static int frame_index = 0;
+        //update indirect params
+        params.frame_index = frame_index++;
+        param_buffer.set_buffer_data(&params);
+        shader.bind();
+        vao.bind();
+        direct.bind(0);
+        gbuffer0.bind(1);
+        gbuffer1.bind(2);
+        view_z.bind(3);
+        param_buffer.bind(0);
+
+        GL_EXPR(glDepthFunc(GL_LEQUAL));
+        GL_EXPR(glDrawArrays(GL_TRIANGLE_STRIP,0,4));
+        GL_EXPR(glDepthFunc(GL_LESS));
+
+        direct.unbind(0);
+        gbuffer0.unbind(1);
+        gbuffer1.unbind(2);
+        view_z.unbind(3);
+        vao.unbind();
+        shader.unbind();
+    }
+    const texture2d_t& getColor(){
+        return color;
+    }
+private:
+    vertex_array_t vao;
+    IndirectParams params;
+    std140_uniform_block_buffer_t<IndirectParams> param_buffer;
+    program_t shader;
+    texture2d_t color;
+    storage_buffer_t<vec2f> raw_samples;
+};
+
+class IndirectAccumulator{
+public:
+    void initialize(int w,int h){
+        width = w;
+        height = h;
+        shader = program_t::build_from(
+                shader_t<GL_COMPUTE_SHADER>::from_file("asset/Lab3/accumulate.comp"));
+        src.initialize_handle();
+        dst.initialize_handle();
+        src.initialize_texture(1,GL_RGBA8,w,h);
+        dst.initialize_texture(1,GL_RGBA8,w,h);
+        p_src = &src;
+        p_dst = &dst;
+    }
+    void setFactor(float ratio){
+        shader.bind();
+        shader.set_uniform_var("Ratio",ratio);
+        shader.unbind();
+    }
+    void setCamera(const mat4& pre_proj_view){
+        shader.bind();
+        shader.set_uniform_var("PreViewProj",pre_proj_view);
+        shader.unbind();
+    }
+    void setSampler(const sampler_t& sampler){
+        sampler.bind(0);
+        sampler.bind(1);
+    }
+    void accumulate(const texture2d_t& pre_gbuffer0,
+                    const texture2d_t& cur_gbuffer0,
+                    const texture2d_t& indirect){
+        constexpr int group_thread_size_x = 16;
+        constexpr int group_thread_size_y = 16;
+        auto get_group_size = [&](int x,int y)->vec2i{
+            return vec2i{
+                    (x + group_thread_size_x - 1) / group_thread_size_x,
+                    (y + group_thread_size_y - 1) / group_thread_size_y
+            };
+        };
+        auto group_size = get_group_size(width,height);
+
+        cur_gbuffer0.bind_image(0,0,GL_READ_ONLY,GL_RGBA32F);
+        indirect.bind_image(1,0,GL_READ_ONLY,GL_RGBA8);
+        p_dst->bind_image(2,0,GL_WRITE_ONLY,GL_RGBA8);
+        p_src->bind(0);
+        pre_gbuffer0.bind(1);
+        shader.bind();
+        GL_EXPR(glDispatchCompute(group_size.x,group_size.y,1));
+        shader.unbind();
+        std::swap(p_src,p_dst);
+    }
+    const texture2d_t& getColor() const{
+        return src;
     }
 private:
     program_t shader;
-    texture2d_t color;
+    int width,height;
+    texture2d_t src;
+    texture2d_t dst;
+    texture2d_t* p_src;
+    texture2d_t* p_dst;
 };
 
 class FinalRenderer{
 public:
-    void initialize(int w,int t){
+    void initialize(int w,int h){
+        shader = program_t::build_from(
+                shader_t<GL_VERTEX_SHADER>::from_file("asset/Lab3/quad.vert"),
+                shader_t<GL_FRAGMENT_SHADER>::from_file("asset/Lab3/final.frag"));
+        shader.bind();
+        shader.set_uniform_var("Direct",0);
+        shader.set_uniform_var("Indirect",1);
+        shader.set_uniform_var("GBuffer1",2);
+        shader.unbind();
+        vao.initialize_handle();
+    }
 
+    void setSampler(const sampler_t& sampler){
+        sampler.bind(0);
+        sampler.bind(1);
+        sampler.bind(2);
+    }
+    void setFinalParams(bool enable_direct,bool enable_indirect,bool enable_tonemap,float exposure){
+        shader.bind();
+        shader.set_uniform_var<int>("EnableDirect",enable_direct);
+        shader.set_uniform_var<int>("EnableIndirect",enable_indirect);
+        shader.set_uniform_var<int>("EnableTonemap",enable_tonemap);
+        shader.set_uniform_var("Exposure",exposure);
+        shader.unbind();
+    }
+    void render(const texture2d_t& direct,
+                const texture2d_t& indirect,
+                const texture2d_t& gbuffer1){
+        direct.bind(0);
+        indirect.bind(1);
+        gbuffer1.bind(2);
+        shader.bind();
+        vao.bind();
+        GL_EXPR(glDepthFunc(GL_LEQUAL));
+
+        GL_EXPR(glDrawArrays(GL_TRIANGLE_STRIP,0,4));
+
+        GL_EXPR(glDepthFunc(GL_LESS));
+        vao.unbind();
+        shader.unbind();
     }
 private:
+    vertex_array_t vao;
     program_t shader;
-    texture2d_t color;
 };
 
 /**
@@ -361,6 +582,16 @@ private:
 
         //direct
         direct.initialize(window->get_window_width(),window->get_window_height());
+
+        //indirect
+        indirect.initialize(window->get_window_width(),window->get_window_height());
+
+        //accumulate
+        accumulator.initialize(window->get_window_width(),window->get_window_height());
+
+        //final
+        final.initialize(window->get_window_width(),window->get_window_height());
+        final.setFinalParams(enable_direct,enable_indirect,enable_tonemap,exposure);
     }
 
     virtual void frame() {
@@ -427,7 +658,41 @@ private:
                       gbuffer->getGBuffer(1));
         off_frame.fbo.unbind();
 
+        //indirect
+        ImGui::InputInt("Ray March Steps,",&max_ray_march_step_count);
+        ImGui::InputFloat("Ray March Step",&ray_march_step,0.01f);
+        off_frame.fbo.bind();
+        indirect.setFramebuffer(off_frame.fbo);
+        indirect.setCamera(camera);
+        indirect.setSample(nearest_clamp_sampler);
+        indirect.setSampleCount(sample_count);
+        indirect.setDepthThreshold(depth_threshold);
+        indirect.setTracer(max_ray_march_step_count,max_ray_march_level,ray_march_step);
+        indirect.render(direct.getColor(),gbuffer->getGBuffer(0),gbuffer->getGBuffer(1),mipmap.getMipMap());
 
+        off_frame.fbo.unbind();
+
+        //accumulate
+        off_frame.fbo.bind();
+        accumulator.setCamera(last_camera_proj_view);
+        accumulator.setFactor(accumulate_ratio);
+        accumulator.setSampler(linear_clamp_sampler);
+        assert(prev_gbuffer != gbuffer);
+        accumulator.accumulate(prev_gbuffer->getGBuffer(0),gbuffer->getGBuffer(0),indirect.getColor());
+        off_frame.fbo.unbind();
+
+        //final
+        framebuffer_t::bind_to_default();
+        framebuffer_t::clear_buffer(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        final.setSampler(nearest_clamp_sampler);
+        bool update = false;
+        update |= ImGui::Checkbox("Enable Direct",&enable_direct);
+        update |= ImGui::Checkbox("Enable Indirect",&enable_indirect);
+        update |= ImGui::Checkbox("Enable Tonemap",&enable_tonemap );
+        update |= ImGui::SliderFloat("Exposure",&exposure,0,10);
+        if(update)
+            final.setFinalParams(enable_direct,enable_indirect,enable_tonemap,exposure);
+        final.render(direct.getColor(),accumulator.getColor(),gbuffer->getGBuffer(1));
 
         ImGui::End();
     }
@@ -439,9 +704,8 @@ private:
 
     bool enable_direct = true;
     bool enable_indirect = true;
-
-    int sample_count = 6;
-    int max_ray_march_step_count = 32;
+    bool enable_tonemap = true;
+    float exposure = 1.0;
 
 
     //light
@@ -484,6 +748,15 @@ private:
 
     //indirect
     IndirectRenderer indirect;
+    int sample_count = 36;
+    int max_ray_march_level = 3;
+    int max_ray_march_step_count = 64;
+    float depth_threshold = 1;//handle ray in the shadow but above frag
+    float ray_march_step = 0.05;
+    //indirect accumulator
+    IndirectAccumulator accumulator;
+
+    float accumulate_ratio = 0.05;
 
     //final
     FinalRenderer final;
@@ -505,7 +778,7 @@ DirectionalLight SSRTApp::getLightProjView() {
 
 int main() {
     SSRTApp(window_desc_t{
-            .size = {1600, 900},
+            .size = {900, 600},
             .title = "ShadowMap",
             .multisamples = 4
     }).run();

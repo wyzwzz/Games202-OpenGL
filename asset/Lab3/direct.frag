@@ -28,7 +28,7 @@ void main() {
     vec3 pos = p0.xyz;
     vec2 oct_normal = vec2(p0.w,p1.w);
     vec3 normal = decodeNormal(oct_normal);
-    vec2 color1 = unpackHalf2x16(uint(p1.x));
+    vec2 color1 = unpackHalf2x16(floatBitsToUint(p1.x));
     vec3 albedo = vec3(color1.x,p1.g,color1.y);
 
     float view_z = p1.z;

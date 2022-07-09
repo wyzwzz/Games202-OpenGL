@@ -18,6 +18,7 @@ vec2 octWrap(vec2 v)
 }
 
 // https://knarkowicz.wordpress.com/2014/04/16/octahedron-normal-vector-encoding/
+// https://www.shadertoy.com/view/llfcRl
 vec2 encodeNormal(vec3 n)
 {
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
@@ -41,7 +42,7 @@ void main() {
 
     //1/PI for cos weight hemisphere sampling
     vec3 color  = albedo / 3.14159265;
-    float color1 = float(packHalf2x16(color.rb));
+    float color1 = uintBitsToFloat(packHalf2x16(color.rb));
     float color2 = color.g;
 
     //ok, just need two rgba32f texture
