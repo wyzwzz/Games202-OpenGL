@@ -224,6 +224,7 @@ public:
         int height;
         float depth_threshold;
         float ray_march_step;
+        int use_hierarchical_trace;
     };
     void initialize(int w,int h){
         params.width = w;
@@ -278,10 +279,11 @@ public:
     void setDepthThreshold(float s){
         params.depth_threshold = s;
     }
-    void setTracer(int max_steps,int trace_max_level,float ray_march_step){
+    void setTracer(int max_steps,int trace_max_level,float ray_march_step,bool use_hierarchical_trace){
         params.indirect_ray_max_steps = max_steps;
-        params.trace_max_level = trace_max_level;
+        params.trace_max_level = std::min(trace_max_level,16);
         params.ray_march_step = ray_march_step;
+        params.use_hierarchical_trace = use_hierarchical_trace;
     }
     void setFramebuffer(const framebuffer_t& fbo){
         fbo.attach(GL_COLOR_ATTACHMENT0,color);
@@ -585,7 +587,7 @@ private:
 
         //indirect
         indirect.initialize(window->get_window_width(),window->get_window_height());
-
+        indirect.setSampleCount(sample_count);
         //accumulate
         accumulator.initialize(window->get_window_width(),window->get_window_height());
 
@@ -603,9 +605,12 @@ private:
         if (ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)){
             ImGui::Text("Press LCtrl to show/hide cursor");
             ImGui::Text("Use W/A/S/D/Space/LShift to move");
+            if(ImGui::Checkbox("VSync",&vsync))
+                window->set_vsync(vsync);
             ImGui::Text("FPS: %.0f", ImGui::GetIO().Framerate);
 
-
+            ImGui::SliderFloat("Light Y Degree",&light.light_y_degree,0,90);
+            ImGui::SliderFloat("Light X Degree",&light.light_x_degree,0,360);
         }
 
         //render
@@ -659,15 +664,29 @@ private:
         off_frame.fbo.unbind();
 
         //indirect
-        ImGui::InputInt("Ray March Steps,",&max_ray_march_step_count);
-        ImGui::InputFloat("Ray March Step",&ray_march_step,0.01f);
+        ImGui::Checkbox("Use Hierarchical Mipmap Trace",&use_hierarchical_trace);
+        if(use_hierarchical_trace){
+            ImGui::Text("Stochastic Screen-Space Reflections");
+            ImGui::InputInt("Ray Trace Steps,",&max_ray_march_step_count);
+            ImGui::InputFloat("Ray Trace Step",&ray_trace_step,1.f);
+            ImGui::InputInt("Ray Trace Max Mip Level",&max_ray_march_level);
+            std::clamp(max_ray_march_level,0,6);
+        }
+        else{
+            ImGui::Text("Linear Ray Marching in View Space");
+            ImGui::InputInt("Ray March Steps,",&max_ray_march_step_count);
+            ImGui::InputFloat("Ray March Step",&ray_march_step,0.01f);
+        }
+        ImGui::InputFloat("Depth Threshold",&depth_threshold,0.1);
         off_frame.fbo.bind();
         indirect.setFramebuffer(off_frame.fbo);
         indirect.setCamera(camera);
         indirect.setSample(nearest_clamp_sampler);
-        indirect.setSampleCount(sample_count);
+        if(ImGui::InputInt("Indirect Sample Count",&sample_count))
+            indirect.setSampleCount(sample_count);
         indirect.setDepthThreshold(depth_threshold);
-        indirect.setTracer(max_ray_march_step_count,max_ray_march_level,ray_march_step);
+        indirect.setTracer(max_ray_march_step_count,max_ray_march_level,
+                           use_hierarchical_trace ? ray_trace_step : ray_march_step,use_hierarchical_trace);
         indirect.render(direct.getColor(),gbuffer->getGBuffer(0),gbuffer->getGBuffer(1),mipmap.getMipMap());
 
         off_frame.fbo.unbind();
@@ -701,7 +720,7 @@ private:
 private:
     DirectionalLight getLightProjView();
 private:
-
+    bool vsync = true;
     bool enable_direct = true;
     bool enable_indirect = true;
     bool enable_tonemap = true;
@@ -748,11 +767,13 @@ private:
 
     //indirect
     IndirectRenderer indirect;
-    int sample_count = 36;
+    int sample_count = 4;
     int max_ray_march_level = 3;
-    int max_ray_march_step_count = 64;
+    int max_ray_march_step_count = 32;
     float depth_threshold = 1;//handle ray in the shadow but above frag
     float ray_march_step = 0.05;
+    float ray_trace_step = 2.0;
+    bool use_hierarchical_trace = true;
     //indirect accumulator
     IndirectAccumulator accumulator;
 
@@ -779,7 +800,7 @@ DirectionalLight SSRTApp::getLightProjView() {
 int main() {
     SSRTApp(window_desc_t{
             .size = {900, 600},
-            .title = "ShadowMap",
+            .title = "SSRT",
             .multisamples = 4
     }).run();
 }

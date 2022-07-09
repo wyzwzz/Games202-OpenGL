@@ -17,6 +17,7 @@ layout(std140,binding = 0) uniform IndirectParams{
     int Height;
     float DepthThreshold;
     float RayMarchingStep;
+    int UseHierarchicalTrace;
 };
 
 layout(std430,binding = 0) buffer RandomSamples{
@@ -46,7 +47,8 @@ bool hierarchicalRayTrace(in float jitter,in vec3 ori,in vec3 dir,out vec2 res_u
     //    if(above z plane) ++level;
     //    if(below z plane) --level;
 
-    vec3 end = ori + dir;
+    float ray_len = (ori.z + dir.z < 0.1) ? (0.1 - ori.z) / dir.z : 1;
+    vec3 end = ori + dir * ray_len;
 
     vec4 ori_clip = Proj * vec4(ori,1.0);
     vec4 end_clip = Proj * vec4(end,1.0);
@@ -54,52 +56,55 @@ bool hierarchicalRayTrace(in float jitter,in vec3 ori,in vec3 dir,out vec2 res_u
     float inv_ori_w = 1.0 / ori_clip.w;
     float inv_end_w = 1.0 / end_clip.w;
 
-    vec2 ori_ndc = ori_clip.xy / inv_ori_w;//-1 ~ 1
-    vec2 end_ndc = end_clip.xy / inv_end_w;
-
+    vec2 ori_ndc = ori_clip.xy * inv_ori_w;//-1 ~ 1
+    vec2 end_ndc = end_clip.xy * inv_end_w;
     vec2 extend_ndc = end_ndc - ori_ndc;
+
     int width = Width;
     int height = Height;
+    vec2 delta_pixel = extend_ndc * vec2(width,height);
+
     bool swap_xy = false;
-    if(abs(extend_ndc.x * Width) < abs(extend_ndc.y * Height)){
+    if(abs(extend_ndc.x * width) < abs(extend_ndc.y * height)){
         swap_xy = true;
         ori_ndc = ori_ndc.yx;
         end_ndc = end_ndc.yx;
         extend_ndc = extend_ndc.yx;
+        delta_pixel = delta_pixel.yx;
         width = Height;
         height = Width;
     }
     float dx = sign(extend_ndc.x) * 2 / width;
-    dx *= abs(extend_ndc.x) / length(extend_ndc);
+    dx *= abs(delta_pixel.x) / length(delta_pixel);
     float dy = extend_ndc.y / extend_ndc.x * dx;
     // differential ndc in unit dist
     vec2 dp = vec2(dx,dy);
 
     float ori_z_over_w = ori.z * inv_ori_w;//-1 ~ 1
-    float end_z_over_w = end.z * inv_ori_w;
+    float end_z_over_w = end.z * inv_end_w;
     float dz_over_w = (end_z_over_w - ori_z_over_w) / extend_ndc.x * dx;
     float dinv_w = (inv_end_w - inv_ori_w) / extend_ndc.x * dx;
 
+#ifndef NO_MIPMAP
     //start from level 0
     int level = 0;
     //ray advance step, will change according to current level
-    float step = pow(2,level);
-    float level_advance_dist[7];
-    int total_steps = 128;
+    float level_advance_dist[16];
+    float step = RayMarchingStep;
+    int total_steps = IndirectRayMaxSteps;
     int steps_count = 0;
+    level_advance_dist[0] = jitter * step;
     int hit = 0;
     while(true){
-
         if(++steps_count > total_steps)
             return false;
 
         //get curret ray advance start pos
-        float t = level_advance_dist[level];
+        float t = level_advance_dist[level] + step;
         //update ray advance dist after current step
-        level_advance_dist[level] = t + step;
+        level_advance_dist[level] = t;
 
         //compute current ray ndc
-
         vec2 p = ori_ndc + t * dp;
         float z_over_w = ori_z_over_w + t * dz_over_w;
         float inv_w = inv_ori_w + t * dinv_w;
@@ -109,26 +114,58 @@ bool hierarchicalRayTrace(in float jitter,in vec3 ori,in vec3 dir,out vec2 res_u
         if(any(notEqual(clamp(uv,vec2(0),vec2(1)),uv)))
             return false;
 
-        float ray_depth = z_over_w / inv_w - DepthThreshold;
+        float ray_depth = z_over_w / inv_w - 0.1;
         float cell_z = textureLod(ViewDepth,uv,level).r;
 
         if(ray_depth < cell_z){
-            if(--hit == 0){
-                level = max(level + 1,6);
-                step *= 2;
+            if(--hit < 0){
+                level = min(level + 1,TraceMaxLevel);
+                level_advance_dist[level] = t;
+                step = float(1 << level) * RayMarchingStep;
             }
             continue;
         }
         //ray intersect with cell of this level, so just advance half of current step
-        if(level-- == 0){
-            res_uv = uv;
-            return (ray_depth - DepthThreshold) <= cell_z;
+        if(level == 0){
+            bool find = (ray_depth - DepthThreshold) <= cell_z;
+            if(find){
+                res_uv = uv;
+                return true;
+            }
         }
         hit = 4;
-        step /= 2;
-        level_advance_dist[level] = t + step;
+        level = max(0,level - 1);
+        level_advance_dist[level] = t - step;
+        step = float(1 << level) * RayMarchingStep;
     }
     return false;
+#else
+    float step = RayMarchingStep;
+    int total_steps = IndirectRayMaxSteps;
+    int steps_count = 0;
+    float t = jitter * step;
+    while(++steps_count < total_steps){
+        vec2 p = ori_ndc + t * dp;
+        float z_over_w = ori_z_over_w + t * dz_over_w;
+        float inv_w = inv_ori_w + t * dinv_w;
+
+        vec2 ndc = swap_xy ? p.yx : p;
+        vec2 uv = ndc * 0.5 + 0.5;
+        if(any(notEqual(clamp(uv,vec2(0),vec2(1)),uv)))
+        return false;
+
+        float ray_depth = z_over_w / inv_w - 0.1;
+        float cell_z = textureLod(ViewDepth,uv,0).r;
+
+        if(ray_depth > cell_z){
+            res_uv = uv;
+            return ray_depth - DepthThreshold <= cell_z;
+        }
+
+        t += step;
+    }
+    return false;
+#endif
 }
 
 bool linearRayMarching(in float jitter,in vec3 ori,in vec3 dir,out vec2 res_uv){
@@ -143,9 +180,9 @@ bool linearRayMarching(in float jitter,in vec3 ori,in vec3 dir,out vec2 res_uv){
         if(any(notEqual(clamp(uv,vec2(0),vec2(1)),uv)))
             return false;
         float z = textureLod(ViewDepth,uv,0).r;
-        if(ray_depth  >=  z && ray_depth - DepthThreshold <= z){
+        if(ray_depth >= z){
             res_uv = uv;
-            return true;
+            return ray_depth - DepthThreshold <= z;
         }
     }
     return false;
@@ -196,14 +233,19 @@ void main() {
 
         //perform ray marching accoding to ori and dir
         vec2 uv;
-        if(linearRayMarching(jitter,ori,dir,uv)){
-            vec3 direct = texture(Direct,uv).rgb;
-            indirect_sum += direct;
+        if(bool(UseHierarchicalTrace)){
+            if(hierarchicalRayTrace(jitter,ori,dir,uv)){
+                vec3 direct = texture(Direct,uv).rgb;
+                indirect_sum += direct;
+            }
         }
-//        if(hierarchicalRayTrace(jitter,ori,dir,uv)){
-//            vec3 direct = texture(Direct,uv).rgb;
-//            indirect_sum += direct;
-//        }
+        else{
+            if(linearRayMarching(jitter,ori,dir,uv)){
+                vec3 direct = texture(Direct,uv).rgb;
+                indirect_sum += direct;
+            }
+        }
+
     }
     //d_omega is 2 * PI / N for sample hemisphere
     oFragColor = vec4(2.0 * PI * indirect_sum / IndirectSampleCount, 1);

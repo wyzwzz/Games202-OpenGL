@@ -33,7 +33,7 @@ void main() {
 
     float view_z = p1.z;
 
-    vec4 clip_coord = LightProjView * vec4(pos + normal * 0.04,1.0);
+    vec4 clip_coord = LightProjView * vec4(pos + normal * 0.02,1.0);
     vec3 ndc_coord = (clip_coord.xyz / clip_coord.w) * 0.5 + 0.5;
     float shadow_z = texture(ShadowMap,ndc_coord.xy).r;
     float shadow_factor = shadow_z >= ndc_coord.z ? 1 : 0;
