@@ -809,10 +809,10 @@ private:
     IndirectRenderer indirect;
     int sample_count = 4;
     int max_ray_march_level = 3;
-    int max_ray_march_step_count = 32;
+    int max_ray_march_step_count = 64;
     float depth_threshold = 1;//handle ray in the shadow but above frag
     float ray_march_step = 0.05;
-    float ray_trace_step = 2.0;
+    float ray_trace_step = 1.0;
     bool use_hierarchical_trace = true;
     //indirect accumulator
     IndirectAccumulator accumulator;

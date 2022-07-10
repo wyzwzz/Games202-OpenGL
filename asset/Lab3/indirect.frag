@@ -248,6 +248,7 @@ void main() {
         vec2 uv;
         if (bool(UseHierarchicalTrace)){
             if (hierarchicalRayTrace(jitter, ori, dir, uv)){
+                //using mc cos-weight hemisphere sample, pdf is cos/PI
                 vec3 direct = texture(Direct, uv).rgb;
                 indirect_sum += direct;
             }
@@ -259,6 +260,6 @@ void main() {
             }
         }
     }
-    //d_omega is 2 * PI / N for sample hemisphere
-    oFragColor = vec4(2.0 * PI * indirect_sum / IndirectSampleCount, 1);
+
+    oFragColor = vec4(PI * indirect_sum / IndirectSampleCount, 1);
 }
