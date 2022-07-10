@@ -28,21 +28,21 @@ vec3 tonemap(vec3 x)
 void main() {
 
     vec3 color = vec3(0);
-    vec4 direct = texture(Direct,iUV);
-    vec4 indirect = texture(Indirect,iUV);
-    vec4 p1 = texture(GBuffer1,iUV);
+    vec4 direct = texture(Direct, iUV);
+    vec4 indirect = texture(Indirect, iUV);
+    vec4 p1 = texture(GBuffer1, iUV);
     vec2 color1 = unpackHalf2x16(floatBitsToUint(p1.x));
-    vec3 albedo = vec3(color1.x,p1.g,color1.y);
+    vec3 albedo = vec3(color1.x, p1.g, color1.y);
 
-    if(bool(EnableDirect))
+    if (bool(EnableDirect))
         color += direct.rgb * direct.w;
-    if(bool(EnableIndirect))
+    if (bool(EnableIndirect))
         color += albedo * indirect.rgb * indirect.w;
 
-    if(bool(EnableTonemap)){
-        oFragColor = vec4(pow(tonemap(color),vec3(1.0/2.2)),1);
+    if (bool(EnableTonemap)){
+        oFragColor = vec4(pow(tonemap(color), vec3(1.0/2.2)), 1);
     }
-    else{
-        oFragColor = vec4(pow(color,vec3(1.0/2.2)),1.0);
+    else {
+        oFragColor = vec4(pow(color, vec3(1.0/2.2)), 1.0);
     }
 }

@@ -14,7 +14,7 @@ layout(location = 1) out vec4 output1;
 
 vec2 octWrap(vec2 v)
 {
-    return (1.0 - abs(v.yx)) * (all(greaterThanEqual(v.xy,vec2(0.0))) ? vec2(1.0) : vec2(-1.0));
+    return (1.0 - abs(v.yx)) * (all(greaterThanEqual(v.xy, vec2(0.0))) ? vec2(1.0) : vec2(-1.0));
 }
 
 // https://knarkowicz.wordpress.com/2014/04/16/octahedron-normal-vector-encoding/
@@ -31,12 +31,12 @@ vec2 encodeNormal(vec3 n)
 void main() {
     vec3 world_normal  = normalize(iFragNormal);
     vec3 world_tangent = normalize(iFragTangent);
-    vec3 world_bitangent = normalize(cross(world_normal,world_tangent));
+    vec3 world_bitangent = normalize(cross(world_normal, world_tangent));
 
     //gamma space to linear space
-    vec3 albedo = pow(texture(AlbedoMap,iUV).rgb,vec3(2.2));
+    vec3 albedo = pow(texture(AlbedoMap, iUV).rgb, vec3(2.2));
 
-    vec3 local_normal = normalize(2 * texture(NormalMap,iUV).xyz - vec3(1));
+    vec3 local_normal = normalize(2 * texture(NormalMap, iUV).xyz - vec3(1));
     vec3 normal = local_normal.x * world_tangent + local_normal.y * world_bitangent + local_normal.z * world_normal;
     vec2 oct_normal = encodeNormal(normal);
 
@@ -46,6 +46,6 @@ void main() {
     float color2 = color.g;
 
     //ok, just need two rgba32f texture
-    output0 = vec4(iFragPos,normal.x);
-    output1 = vec4(color1,color2,iViewDepth,normal.y);
+    output0 = vec4(iFragPos, normal.x);
+    output1 = vec4(color1, color2, iViewDepth, normal.y);
 }

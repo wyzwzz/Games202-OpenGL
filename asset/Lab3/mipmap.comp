@@ -10,7 +10,7 @@ uniform vec2 CurSize;
 
 void main() {
     ivec2 g_index = ivec2(gl_WorkGroupSize.xy * gl_WorkGroupID.xy + gl_LocalInvocationID.xy);
-    if(g_index.x >= CurSize.x || g_index.y >= CurSize.y){
+    if (g_index.x >= CurSize.x || g_index.y >= CurSize.y){
         return;
     }
 
@@ -20,13 +20,13 @@ void main() {
     ivec2 beg = ivec2(floor(uv00 * PreSize));
     ivec2 end = ivec2(ceil(uv11 * PreSize));
     float depth = 1.0 / 0.0;
-    for(int x = beg.x; x < end.x; ++x){
-        for(int y = beg.y; y < end.y; ++y){
-            float d = imageLoad(PreLevel,ivec2(x,y)).r;
-            if(d > 0)
-                depth = min(d,depth);
+    for (int x = beg.x; x < end.x; ++x){
+        for (int y = beg.y; y < end.y; ++y){
+            float d = imageLoad(PreLevel, ivec2(x, y)).r;
+            if (d > 0)
+            depth = min(d, depth);
         }
     }
     //depth of 0 will generate infinity in next level
-    imageStore(CurLevel,g_index,vec4(depth));
+    imageStore(CurLevel, g_index, vec4(depth));
 }
