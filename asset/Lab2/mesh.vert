@@ -3,16 +3,24 @@ layout(location = 0) in vec3 iVertexPos;
 layout(location = 1) in vec3 iVertexNormal;
 layout(location = 2) in vec2 iTexCoord;
 
-layout(location = 0) out vec3 oVertexPos;
-layout(location = 1) out vec3 oVertexNormal;
-layout(location = 2) out vec2 oTexCoord;
+layout(location = 0) out vec3 oColor;
 
+layout(std140,binding = 0) uniform LightInfo{
+    vec4 LightSH[25];//max degree is 4
+};
+layout(std430,binding = 0) readonly buffer VertexInfo{
+    float VertexSH[];
+};
+uniform int LightSHCount;// equal to (degree + 1) ^ 2
 uniform mat4 Model;
 uniform mat4 ProjView;
 
 void main() {
     gl_Position = ProjView * Model * vec4(iVertexPos, 1.0);
-    oVertexPos = vec3(Model * vec4(iVertexPos,1));
-    oVertexNormal = vec3(Model * vec4(iVertexNormal,0));
-    oTexCoord = iTexCoord;
+
+    vec3 color = vec3(0);
+    int offset = gl_VertexID * LightSHCount * 3;
+    for(int i = 0; i < LightSHCount; ++i)
+        color += LightSH[i].rgb * vec3(VertexSH[offset + i * 3],VertexSH[offset + i * 3 + 1],VertexSH[offset + i * 3 + 2]);
+    oColor = color;
 }

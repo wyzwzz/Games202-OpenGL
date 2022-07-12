@@ -1,6 +1,3 @@
-//
-// Created by wyz on 2022/7/7.
-//
 #include "../common.hpp"
 
 template<typename T, typename Func>
@@ -134,7 +131,7 @@ auto generateEavg(const wzz::texture::image2d_t<float>& Emiu){
     return Eavg;
 }
 
-class KullaContyBRDFAPP final: public gl_app_t{
+class KullaContyBRDFApp final: public gl_app_t{
 public:
     using gl_app_t::gl_app_t;
 private:
@@ -301,7 +298,7 @@ private:
     std140_uniform_block_buffer_t<Params> params_buffer;
 };
 int main(){
-    KullaContyBRDFAPP(window_desc_t{
+    KullaContyBRDFApp(window_desc_t{
         .size = {1280,720},
         .title = "Kulla-Conty BRDF",
         .multisamples = 4}
