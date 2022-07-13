@@ -1,57 +1,5 @@
 #include "../common.hpp"
 
-template<typename T, typename Func>
-void parallel_forrange(T beg, T end, Func &&func, int worker_count = 0)
-{
-    std::mutex it_mutex;
-    T it = beg;
-    auto next_item = [&]() -> std::optional<T>
-    {
-        std::lock_guard lk(it_mutex);
-        if(it == end)
-            return std::nullopt;
-        return std::make_optional(it++);
-    };
-
-    std::mutex except_mutex;
-    std::exception_ptr except_ptr = nullptr;
-
-    auto worker_func = [&](int thread_index)
-    {
-        for(;;)
-        {
-            auto item = next_item();
-            if(!item)
-                break;
-
-            try
-            {
-                func(thread_index, *item);
-            }
-            catch(...)
-            {
-                std::lock_guard lk(except_mutex);
-                if(!except_ptr)
-                    except_ptr = std::current_exception();
-            }
-
-            std::lock_guard lk(except_mutex);
-            if(except_ptr)
-                break;
-        }
-    };
-
-    std::vector<std::thread> workers;
-    for(int i = 0; i < worker_count; ++i)
-        workers.emplace_back(worker_func, i);
-
-    for(auto &w : workers)
-        w.join();
-
-    if(except_ptr)
-        std::rethrow_exception(except_ptr);
-}
-
 float geometrySchlickGGX(float NdotV, float roughness){
     float a = roughness;
     float k = (a * a) / 2.0;
@@ -196,7 +144,7 @@ private:
     void frame() override {
          handle_events();
         if(ImGui::Begin("Settings",nullptr,ImGuiWindowFlags_AlwaysAutoResize)){
-            ImGui::ColorEdit3("Albedo",&albedo.x);
+            //ImGui::ColorEdit3("Albedo",&albedo.x);
             ImGui::ColorEdit3("Edge Tint",&params.edge_tint.x);
             ImGui::SliderFloat("Roughness",&roughness,0,1);
             ImGui::SliderFloat("Metallic",&params.metallic,0,1);
