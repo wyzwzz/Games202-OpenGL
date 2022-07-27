@@ -76,6 +76,14 @@ bool hierarchicalRayTrace(in float jitter, in vec3 ori, in vec3 dir, out vec2 re
         width = Height;
         height = Width;
     }
+
+    // x01 y01 z01 is view space coord
+    // dx ~ near * (x1 / z1 - x0 / z0)
+    // dy ~ near * (y1 / z1 - y0 / z0)
+    // dz ~ near * far * (1 / z1 - 1 / z0) ==> z ~ (1 / z1 - 1 / z0)
+    // w = view z
+    // d(1/w) is linear in ndc space coord
+
     //ndc x delta per pixel
     float dx = sign(extend_ndc.x) * 2 / width;
     //normalize dx

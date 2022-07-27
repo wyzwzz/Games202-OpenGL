@@ -288,9 +288,8 @@ public:
                 resultSamples.data(), resultSamples.size());
 
         static_assert(sizeof(cy::Point2f) == sizeof(float) * 2);
-        const size_t bufBytes = sizeof(vec2f) * N;
 
-        raw_samples.initialize_buffer_data(reinterpret_cast<vec2f *>(resultSamples.data()), bufBytes,
+        raw_samples.initialize_buffer_data(reinterpret_cast<vec2f *>(resultSamples.data()), N,
                                            GL_DYNAMIC_STORAGE_BIT);
         raw_samples.bind(0);
 

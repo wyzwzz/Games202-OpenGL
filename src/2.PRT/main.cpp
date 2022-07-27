@@ -303,7 +303,7 @@ void PRTApp::loadModel(const std::string& filename,const std::string& mtl){
         auto &draw_mesh = draw_meshes[i];
         draw_mesh.vertex_sh_ssbo.initialize_handle();
         draw_mesh.vertex_sh_ssbo.initialize_buffer_data(reinterpret_cast<const float *>(coefs.data()),
-                                                        coefs.size() * sizeof(vec3f),
+                                                        coefs.size() * 3,
                                                         GL_DYNAMIC_STORAGE_BIT);
         //store pre-computed results for all degree
         mp[&draw_mesh][static_cast<int>(light_mode)] = std::move(coefs);
