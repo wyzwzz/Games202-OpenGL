@@ -764,7 +764,7 @@ private:
     bool enable_direct = true;
     bool enable_indirect = true;
     bool enable_tonemap = true;
-    float exposure = 1.0;
+    float exposure = 1.5;
 
     //light
     struct {
@@ -832,7 +832,7 @@ DirectionalLight SSRTApp::getLightProjView() {
             std::sin(wzz::math::deg2rad(light.light_x_degree))
     };
     return {direction, 0, light.light_radiance, 0,
-            transform::orthographic(-5, 5, -5, 5, 3, 40) *
+            transform::orthographic(-5, 5, 5, -5, 3, 40) *
             transform::look_at(light_target - 15.f * direction, light_target, {1, 0, 0})};
 }
 

@@ -14,7 +14,7 @@ layout(location = 1) out vec4 output1;
 
 vec2 octWrap(vec2 v)
 {
-    return (1.0 - abs(v.yx)) * (all(greaterThanEqual(v.xy, vec2(0.0))) ? vec2(1.0) : vec2(-1.0));
+    return (1.0 - abs(v.yx)) * vec2((v.x >= 0.0 ? 1.0 : -1.0), (v.y >= 0.0 ? 1.0 : -1.0));
 }
 
 // https://knarkowicz.wordpress.com/2014/04/16/octahedron-normal-vector-encoding/
@@ -23,6 +23,7 @@ vec2 encodeNormal(vec3 n)
 {
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
     n.xy = n.z >= 0.0 ? n.xy : octWrap(n.xy);
+    n.xy = n.xy * 0.5 + 0.5;
     return n.xy;
 }
 
@@ -38,7 +39,7 @@ void main() {
 
     vec3 local_normal = normalize(2 * texture(NormalMap, iUV).xyz - vec3(1));
     vec3 normal = local_normal.x * world_tangent + local_normal.y * world_bitangent + local_normal.z * world_normal;
-    vec2 oct_normal = encodeNormal(normal);
+    vec2 oct_normal = encodeNormal(normalize(normal));
 
     //1/PI for cos weight hemisphere sampling
     vec3 color  = albedo / 3.14159265;

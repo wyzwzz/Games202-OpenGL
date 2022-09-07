@@ -31,9 +31,10 @@ uniform sampler2D ViewDepth;
 
 vec3 decodeNormal(vec2 f)
 {
+    f = f * 2.0 - 1.0;
     vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
     float t = clamp(-n.z, 0, 1);
-    n.xy += all(greaterThanEqual(n.xy, vec2(0.0))) ? vec2(-t) : vec2(t);
+    n.xy += vec2((n.x >= 0 ? -t : t), (n.y >= 0 ? -t : t));
     return normalize(n);
 }
 
