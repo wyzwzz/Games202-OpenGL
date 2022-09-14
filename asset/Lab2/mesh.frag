@@ -14,6 +14,6 @@ layout(location = 0) out vec4 oFragColor;
 //in uint  gl_ThreadInWarpNV;	// 当前线程id，取值[0, gl_WarpSizeNV-1]
 
 void main() {
-//    oFragColor = vec4(pow(iFragColor,vec3(1.0/2.2)),1.0);
-    oFragColor = vec4(vec3(float(gl_WarpIDNV) / float(gl_WarpsPerSMNV)),1.0);
+    oFragColor = vec4(pow(iFragColor,vec3(1.0/2.2)),1.0);
+//    oFragColor = vec4(vec3(float(gl_WarpIDNV) / float(gl_WarpsPerSMNV)),1.0);
 }
